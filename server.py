@@ -64,7 +64,10 @@ class ZmqClient:
         self._socket = None
 
 
+import atexit
+
 zmq_client = ZmqClient(ZMQ_HOST, ZMQ_PORT, ZMQ_TIMEOUT)
+atexit.register(zmq_client._ctx.term)
 
 
 def _json_text(data) -> list[TextContent]:
@@ -226,7 +229,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if result.get("status") == "error":
             return _error_text(result.get("message", "unknown error"))
 
-        return _json_text(result["data"])
+        return _json_text(result.get("data", {}))
 
     except Exception as e:
         return _error_text(f"予期しないエラー: {e}")
