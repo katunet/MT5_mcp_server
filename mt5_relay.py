@@ -291,6 +291,7 @@ def main():
     mt5_login = os.environ.get("MT5_LOGIN", "")
     mt5_password = os.environ.get("MT5_PASSWORD", "")
     mt5_server = os.environ.get("MT5_SERVER", "")
+    mt5_portable = os.environ.get("MT5_PORTABLE", "false").lower() == "true"
     if mt5_path:
         init_kwargs["path"] = mt5_path
     if mt5_login:
@@ -299,6 +300,8 @@ def main():
         init_kwargs["password"] = mt5_password
     if mt5_server:
         init_kwargs["server"] = mt5_server
+    if mt5_portable:
+        init_kwargs["portable"] = True
     if not mt5.initialize(**init_kwargs):
         logger.error(f"MT5 initialize failed: {mt5.last_error()}")
         sys.exit(1)
