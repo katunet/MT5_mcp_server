@@ -282,7 +282,7 @@ def main():
     if mt5 is None:
         logger.error("MetaTrader5 package not available. Install on Windows VPS.")
         sys.exit(1)
-    if not mt5.initialize():
+    if not mt5.initialize(path=r"C:\Users\MQ\ICSlavePhenix\terminal64.exe"):
         logger.error(f"MT5 initialize failed: {mt5.last_error()}")
         sys.exit(1)
     info = mt5.account_info()
