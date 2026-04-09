@@ -13,6 +13,9 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 import zmq
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 try:
     import MetaTrader5 as mt5
