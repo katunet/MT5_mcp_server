@@ -17,6 +17,7 @@ class TestToolDefinitions:
             "get_account_info", "get_positions", "get_ohlcv",
             "get_ticks", "get_symbol_info",
             "get_history_deals", "get_history_orders",
+            "download_ticks_bulk",
         }
         assert names == expected
 
