@@ -9,7 +9,7 @@ import json
 import sys
 import time
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import zmq
 
@@ -197,6 +197,35 @@ def handle_get_history_orders(params: dict) -> str:
     return make_response([o._asdict() for o in orders])
 
 
+def handle_get_ticks_hour(params: dict) -> str:
+    """1時間分のティックを copy_ticks_range で取得する。
+
+    params:
+        symbol: str   通貨ペア (例: "XAUUSD")
+        date:   str   日付 "YYYY-MM-DD"
+        hour:   int   時間 0-23 (UTC)
+    """
+    symbol = params.get("symbol", "XAUUSD")
+    date_str = params.get("date")
+    if not date_str:
+        return make_error("date is required")
+    hour = int(params.get("hour", 0))
+
+    try:
+        y, m, d = (int(x) for x in date_str.split("-"))
+    except (ValueError, KeyError) as e:
+        return make_error(f"invalid date: {e}")
+
+    dt_from = datetime(y, m, d, hour, 0, 0, tzinfo=timezone.utc)
+    dt_to = dt_from + timedelta(hours=1)
+
+    ticks = mt5.copy_ticks_range(symbol, dt_from, dt_to, mt5.COPY_TICKS_ALL)
+    if ticks is None:
+        code, msg = mt5.last_error()
+        return make_error(f"copy_ticks_range failed: {msg}", code)
+    return make_response(records_to_dicts(ticks))
+
+
 # ---------------------------------------------------------------------------
 # Command dispatcher
 # ---------------------------------------------------------------------------
@@ -205,6 +234,7 @@ COMMANDS = {
     "get_positions": handle_get_positions,
     "get_ohlcv": handle_get_ohlcv,
     "get_ticks": handle_get_ticks,
+    "get_ticks_hour": handle_get_ticks_hour,
     "get_symbol_info": handle_get_symbol_info,
     "get_history_deals": handle_get_history_deals,
     "get_history_orders": handle_get_history_orders,
