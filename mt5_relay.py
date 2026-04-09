@@ -283,8 +283,19 @@ def main():
     if mt5 is None:
         logger.error("MetaTrader5 package not available. Install on Windows VPS.")
         sys.exit(1)
+    init_kwargs = {}
     mt5_path = os.environ.get("MT5_TERMINAL_PATH", "")
-    init_kwargs = {"path": mt5_path} if mt5_path else {}
+    mt5_login = os.environ.get("MT5_LOGIN", "")
+    mt5_password = os.environ.get("MT5_PASSWORD", "")
+    mt5_server = os.environ.get("MT5_SERVER", "")
+    if mt5_path:
+        init_kwargs["path"] = mt5_path
+    if mt5_login:
+        init_kwargs["login"] = int(mt5_login)
+    if mt5_password:
+        init_kwargs["password"] = mt5_password
+    if mt5_server:
+        init_kwargs["server"] = mt5_server
     if not mt5.initialize(**init_kwargs):
         logger.error(f"MT5 initialize failed: {mt5.last_error()}")
         sys.exit(1)
