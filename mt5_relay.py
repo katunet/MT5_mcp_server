@@ -6,6 +6,7 @@ Mac側のMCPサーバーからのリクエストを受けてMT5にクエリし�
 """
 
 import json
+import os
 import sys
 import time
 import logging
@@ -282,7 +283,9 @@ def main():
     if mt5 is None:
         logger.error("MetaTrader5 package not available. Install on Windows VPS.")
         sys.exit(1)
-    if not mt5.initialize(path=r"C:\Users\MQ\ICSlavePhenix\terminal64.exe"):
+    mt5_path = os.environ.get("MT5_TERMINAL_PATH", "")
+    init_kwargs = {"path": mt5_path} if mt5_path else {}
+    if not mt5.initialize(**init_kwargs):
         logger.error(f"MT5 initialize failed: {mt5.last_error()}")
         sys.exit(1)
     info = mt5.account_info()
