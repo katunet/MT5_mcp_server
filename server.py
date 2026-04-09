@@ -7,9 +7,12 @@ MT5のデータをMCPツールとしてClaude Codeに公開する。
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import asyncio
+from datetime import date as _date, timedelta as _timedelta
+from pathlib import Path as _Path
 
 import zmq
 import zmq.asyncio
@@ -68,6 +71,75 @@ import atexit
 
 zmq_client = ZmqClient(ZMQ_HOST, ZMQ_PORT, ZMQ_TIMEOUT)
 atexit.register(zmq_client._ctx.term)
+
+# ---------------------------------------------------------------------------
+# WD_Black キャッシュパス解決
+# ---------------------------------------------------------------------------
+_WD_BLACK_MT5 = _Path("/Volumes/WD_Black/MT5_cache")
+_LOCAL_MT5 = _Path(__file__).resolve().parent / "MT5_cache"
+
+_TICK_FIELDS = ["time_msc", "bid", "ask", "last", "volume", "flags"]
+
+
+def resolve_mt5_cache_dir() -> _Path:
+    """WD_Black があればそこを、なければローカルを使う"""
+    if _WD_BLACK_MT5.parent.exists():
+        _WD_BLACK_MT5.mkdir(parents=True, exist_ok=True)
+        return _WD_BLACK_MT5
+    return _LOCAL_MT5
+
+
+async def _download_ticks_bulk_impl(
+    zmq_request,
+    symbol: str,
+    start: str,
+    end: str,
+    broker: str,
+    cache_root: _Path,
+) -> dict:
+    """テスト可能な実装本体。zmq_request は関数オブジェクトとして注入する。"""
+    start_date = _date.fromisoformat(start)
+    end_date = _date.fromisoformat(end)
+    total_ticks = 0
+    days = 0
+    current = start_date
+
+    while current <= end_date:
+        day_ticks = []
+        for hour in range(24):
+            result = await zmq_request("get_ticks_hour", {
+                "symbol": symbol,
+                "date": current.isoformat(),
+                "hour": hour,
+            })
+            if result.get("status") == "ok":
+                day_ticks.extend(result["data"])
+            await asyncio.sleep(0.05)
+
+        if day_ticks:
+            dir_path = cache_root / broker / symbol.upper() / "ticks"
+            dir_path.mkdir(parents=True, exist_ok=True)
+            file_path = dir_path / f"{current.isoformat()}.csv"
+            with open(file_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=_TICK_FIELDS, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(day_ticks)
+            total_ticks += len(day_ticks)
+            days += 1
+
+        current += _timedelta(days=1)
+
+    ticks_dir = cache_root / broker / symbol.upper() / "ticks"
+    size_mb = (
+        sum(f.stat().st_size for f in ticks_dir.glob("*.csv")) / (1024 ** 2)
+        if ticks_dir.exists() else 0.0
+    )
+    return {
+        "path": str(ticks_dir),
+        "days": days,
+        "total_ticks": total_ticks,
+        "size_mb": round(size_mb, 2),
+    }
 
 
 def _json_text(data) -> list[TextContent]:
@@ -210,6 +282,20 @@ TOOLS = [
             "required": ["start_time", "end_time"],
         },
     ),
+    Tool(
+        name="download_ticks_bulk",
+        description="指定期間のMT5ティックをCSVでWD_Blackに一括保存（1日×24時間ループ）。WiFi環境で実行すること。",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string", "description": "通貨ペア (例: XAUUSD)"},
+                "start":  {"type": "string", "description": "開始日 (YYYY-MM-DD)"},
+                "end":    {"type": "string", "description": "終了日 (YYYY-MM-DD)"},
+                "broker": {"type": "string", "description": "ブローカー名 (例: ICMarkets)、省略時は default"},
+            },
+            "required": ["symbol", "start", "end"],
+        },
+    ),
 ]
 
 
@@ -221,6 +307,17 @@ async def list_tools() -> list[Tool]:
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     try:
+        if name == "download_ticks_bulk":
+            result = await _download_ticks_bulk_impl(
+                zmq_request=zmq_client.request,
+                symbol=arguments["symbol"],
+                start=arguments["start"],
+                end=arguments["end"],
+                broker=arguments.get("broker", "default"),
+                cache_root=resolve_mt5_cache_dir(),
+            )
+            return _json_text(result)
+
         if name not in {t.name for t in TOOLS}:
             return _error_text(f"不明なツール: {name}")
 
