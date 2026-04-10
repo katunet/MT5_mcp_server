@@ -3,8 +3,16 @@ MT5 Relay Server
 ================
 VPS上で動作し、MetaTrader5 Python APIのデータをZeroMQ REP経由で公開する。
 Mac側のMCPサーバーからのリクエストを受けてMT5にクエリし、JSONで返す。
+
+起動例（複数口座）:
+  # IC Markets（デフォルト .env）
+  python mt5_relay.py
+
+  # TitanFX（別 .env ファイル + 別ポート）
+  python mt5_relay.py --port 5581 --env .env.titanfx
 """
 
+import argparse
 import json
 import os
 import sys
@@ -14,8 +22,6 @@ from datetime import datetime, timezone, timedelta
 
 import zmq
 from dotenv import load_dotenv
-
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 try:
     import MetaTrader5 as mt5
@@ -278,14 +284,40 @@ def ensure_mt5_connected() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="MT5 Relay Server")
+    p.add_argument(
+        "--port", type=int, default=None,
+        help="ZMQ listen port（省略時は MT5_ZMQ_PORT env or 5580）",
+    )
+    p.add_argument(
+        "--env", type=str, default=None,
+        help=".env ファイルパス（省略時はスクリプトと同じディレクトリの .env）",
+    )
+    return p.parse_args()
+
+
+# ---------------------------------------------------------------------------
 # Main server loop
 # ---------------------------------------------------------------------------
 def main():
-    host = "127.0.0.1"
-    port = 5580
+    args = parse_args()
+
+    # .env 読み込み（--env 指定があればそのファイルを使用）
+    env_path = args.env or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    load_dotenv(env_path)
+    logger.info(f"Loaded env: {env_path}")
+
     if mt5 is None:
         logger.error("MetaTrader5 package not available. Install on Windows VPS.")
         sys.exit(1)
+
+    # ポート: CLI引数 > 環境変数 > デフォルト 5580
+    port = args.port if args.port is not None else int(os.environ.get("MT5_ZMQ_PORT", "5580"))
+    host = "127.0.0.1"
+
     init_kwargs = {}
     mt5_path = os.environ.get("MT5_TERMINAL_PATH", "")
     mt5_login = os.environ.get("MT5_LOGIN", "")
@@ -302,15 +334,19 @@ def main():
         init_kwargs["server"] = mt5_server
     if mt5_portable:
         init_kwargs["portable"] = True
+
     if not mt5.initialize(**init_kwargs):
         logger.error(f"MT5 initialize failed: {mt5.last_error()}")
         sys.exit(1)
+
     info = mt5.account_info()
     logger.info(f"MT5 connected: account={info.login}, server={info.server}")
+
     ctx = zmq.Context()
     socket = ctx.socket(zmq.REP)
     socket.bind(f"tcp://{host}:{port}")
     logger.info(f"ZMQ REP listening on tcp://{host}:{port}")
+
     try:
         while True:
             raw = socket.recv_string()

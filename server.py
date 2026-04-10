@@ -3,6 +3,10 @@ MT5 MCP Server
 ==============
 VPS上のMT5リレーサーバーにZeroMQ経由で接続し、
 MT5のデータをMCPツールとしてClaude Codeに公開する。
+
+マルチ口座設定:
+  .envに MT5_ACCOUNTS=名前:ホスト:ポート,名前:ホスト:ポート の形式で指定。
+  省略時は MT5_ZMQ_HOST / MT5_ZMQ_PORT で単一口座 "default" として動作。
 """
 
 from __future__ import annotations
@@ -11,6 +15,7 @@ import csv
 import json
 import os
 import asyncio
+import atexit
 from datetime import date as _date, timedelta as _timedelta
 from pathlib import Path as _Path
 
@@ -67,10 +72,35 @@ class ZmqClient:
         self._socket = None
 
 
-import atexit
+# ---------------------------------------------------------------------------
+# マルチ口座クライアント管理
+# ---------------------------------------------------------------------------
 
-zmq_client = ZmqClient(ZMQ_HOST, ZMQ_PORT, ZMQ_TIMEOUT)
-atexit.register(zmq_client._ctx.term)
+def _build_account_clients() -> dict[str, ZmqClient]:
+    """
+    MT5_ACCOUNTS=ICMarkets:host:5580,TitanFX:host:5581 をパース。
+    未設定時は MT5_ZMQ_HOST/PORT を "default" として使用。
+    """
+    accounts_str = os.getenv("MT5_ACCOUNTS", "").strip()
+    if accounts_str:
+        clients: dict[str, ZmqClient] = {}
+        for entry in accounts_str.split(","):
+            parts = entry.strip().split(":")
+            if len(parts) == 3:
+                name, host, port_str = parts
+                clients[name.strip()] = ZmqClient(host.strip(), int(port_str.strip()), ZMQ_TIMEOUT)
+        if clients:
+            return clients
+    # フォールバック: 既存の単一口座設定
+    return {"default": ZmqClient(ZMQ_HOST, ZMQ_PORT, ZMQ_TIMEOUT)}
+
+
+account_clients = _build_account_clients()
+_default_account = next(iter(account_clients))
+
+for _c in account_clients.values():
+    atexit.register(_c._ctx.term)
+
 
 # ---------------------------------------------------------------------------
 # WD_Black キャッシュパス解決
@@ -150,15 +180,36 @@ def _error_text(msg: str) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps({"error": msg}, ensure_ascii=False))]
 
 
+# ---------------------------------------------------------------------------
+# ツール共通パラメータ
+# ---------------------------------------------------------------------------
+
+_ACCOUNT_PARAM = {
+    "account": {
+        "type": "string",
+        "description": f"口座名。省略時はデフォルト口座 ({_default_account})。list_accounts で一覧取得可能。",
+    }
+}
+
+
 app = Server("mt5")
 
 TOOLS = [
+    Tool(
+        name="list_accounts",
+        description="設定済みのMT5口座一覧とデフォルト口座を取得",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    ),
     Tool(
         name="get_account_info",
         description="MT5口座情報を取得（残高・証拠金・損益・レバレッジ等）",
         inputSchema={
             "type": "object",
-            "properties": {},
+            "properties": {**_ACCOUNT_PARAM},
             "required": [],
         },
     ),
@@ -172,6 +223,7 @@ TOOLS = [
                     "type": "string",
                     "description": "通貨ペア（例: XAUUSD）。省略時は全ポジション",
                 },
+                **_ACCOUNT_PARAM,
             },
             "required": [],
         },
@@ -198,6 +250,7 @@ TOOLS = [
                     "type": "string",
                     "description": "開始日時 ISO 8601（例: 2026-01-01T00:00:00）。省略時は最新からcount本",
                 },
+                **_ACCOUNT_PARAM,
             },
             "required": ["symbol", "timeframe", "count"],
         },
@@ -220,6 +273,7 @@ TOOLS = [
                     "type": "string",
                     "description": "開始日時 ISO 8601。省略時は直近のcount件",
                 },
+                **_ACCOUNT_PARAM,
             },
             "required": ["symbol", "count"],
         },
@@ -234,6 +288,7 @@ TOOLS = [
                     "type": "string",
                     "description": "通貨ペア（例: XAUUSD）",
                 },
+                **_ACCOUNT_PARAM,
             },
             "required": ["symbol"],
         },
@@ -256,6 +311,7 @@ TOOLS = [
                     "type": "string",
                     "description": "通貨ペアでフィルタ（省略時は全シンボル）",
                 },
+                **_ACCOUNT_PARAM,
             },
             "required": ["start_time", "end_time"],
         },
@@ -278,6 +334,7 @@ TOOLS = [
                     "type": "string",
                     "description": "通貨ペアでフィルタ（省略時は全シンボル）",
                 },
+                **_ACCOUNT_PARAM,
             },
             "required": ["start_time", "end_time"],
         },
@@ -291,12 +348,15 @@ TOOLS = [
                 "symbol": {"type": "string", "description": "通貨ペア (例: XAUUSD)"},
                 "start":  {"type": "string", "description": "開始日 (YYYY-MM-DD)"},
                 "end":    {"type": "string", "description": "終了日 (YYYY-MM-DD)"},
-                "broker": {"type": "string", "description": "ブローカー名 (例: ICMarkets)、省略時は default"},
+                "broker": {"type": "string", "description": "キャッシュ保存先のブローカーフォルダ名。省略時は口座名を使用"},
+                **_ACCOUNT_PARAM,
             },
             "required": ["symbol", "start", "end"],
         },
     ),
 ]
+
+_RELAY_TOOL_NAMES = {t.name for t in TOOLS} - {"list_accounts"}
 
 
 @app.list_tools()
@@ -307,21 +367,35 @@ async def list_tools() -> list[Tool]:
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     try:
+        if name == "list_accounts":
+            return _json_text({
+                "accounts": list(account_clients.keys()),
+                "default": _default_account,
+            })
+
+        # 口座の選択・解決
+        account_name = arguments.pop("account", None) or _default_account
+        client = account_clients.get(account_name)
+        if client is None:
+            available = list(account_clients.keys())
+            return _error_text(f"不明な口座: '{account_name}'。利用可能: {available}")
+
         if name == "download_ticks_bulk":
+            broker = arguments.pop("broker", None) or account_name
             result = await _download_ticks_bulk_impl(
-                zmq_request=zmq_client.request,
+                zmq_request=client.request,
                 symbol=arguments["symbol"],
                 start=arguments["start"],
                 end=arguments["end"],
-                broker=arguments.get("broker", "default"),
+                broker=broker,
                 cache_root=resolve_mt5_cache_dir(),
             )
             return _json_text(result)
 
-        if name not in {t.name for t in TOOLS}:
+        if name not in _RELAY_TOOL_NAMES:
             return _error_text(f"不明なツール: {name}")
 
-        result = await zmq_client.request(name, arguments)
+        result = await client.request(name, arguments)
 
         if result.get("status") == "error":
             return _error_text(result.get("message", "unknown error"))
