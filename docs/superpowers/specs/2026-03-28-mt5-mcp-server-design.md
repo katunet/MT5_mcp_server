@@ -144,6 +144,28 @@ ssh -L 5580:localhost:5580 user@vps-ip -N -f
 3. Claude Code が MCPサーバーを自動起動
 4. Claude がツールを呼び出してデータ取得
 
+## VPS側 `.env` 設定
+
+```ini
+MT5_ZMQ_PORT=5580
+MT5_LOGIN=<口座番号>
+MT5_PASSWORD=<パスワード>
+MT5_SERVER=<サーバー名>
+MT5_TERMINAL_PATH=<terminal64.exeのフルパス>
+# 例: C:\Users\MQ\ICSlavePhenix\terminal64.exe
+```
+
+> **注意**: `MT5_PORTABLE=true` は設定しないこと。
+> ターミナルがポータブルモードで既に起動している場合でも、Python API 側で `portable=True` を渡すと
+> 新規インスタンスを起動しようとして IPC 接続に失敗する（エラー -10003）。
+
+`MT5_TERMINAL_PATH` は省略可能だが、省略するとデフォルトパスを探してターミナルが見つからない場合がある。
+実際に動いているプロセスのパスを確認して明示的に設定すること：
+
+```powershell
+Get-Process terminal64 | Select-Object -ExpandProperty Path
+```
+
 ## 対象シンボル
 
 初期対応: XAUUSD。将来的に EA_Copier 対応の全10ペアに拡張可能。
