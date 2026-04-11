@@ -5,3 +5,21 @@ __pycache__/
 .venv/
 *.log
 .DS_Store
+
+# macOS
+.DS_Store
+
+# ローカル環境設定
+.mcp.json
+
+# Claude Code
+.claude/
+
+# Syncthing
+.stfolder/
+.sync-conflict-*
+*sync-conflict*
+
+# 一時デバッグスクリプト
+t.py
+test_zmq.py
