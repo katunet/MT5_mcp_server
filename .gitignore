@@ -12,6 +12,15 @@ __pycache__/
 # ローカル環境設定
 .mcp.json
 
+# 口座認証情報（.example は除外しない）
+.env.icmarkets
+.env.titanfx
+.env.xm
+.env.*
+!.env.example
+!.env.account.example
+!.env.*.example
+
 # Claude Code
 .claude/
 

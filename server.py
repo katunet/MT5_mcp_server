@@ -1,12 +1,15 @@
 """
 MT5 MCP Server
 ==============
-VPS上のMT5リレーサーバーにZeroMQ経由で接続し、
+ローカルWindows PC上のMT5リレーサーバーにZeroMQ経由で接続し、
 MT5のデータをMCPツールとしてClaude Codeに公開する。
 
 マルチ口座設定:
   .envに MT5_ACCOUNTS=名前:ホスト:ポート,名前:ホスト:ポート の形式で指定。
   省略時は MT5_ZMQ_HOST / MT5_ZMQ_PORT で単一口座 "default" として動作。
+
+ティックキャッシュ保存先:
+  MT5_TICK_CACHE 環境変数で指定（デフォルト: C:\\Users\\katun\\MQ\\tick）
 """
 
 from __future__ import annotations
@@ -103,20 +106,22 @@ for _c in account_clients.values():
 
 
 # ---------------------------------------------------------------------------
-# WD_Black キャッシュパス解決
+# ティックキャッシュパス解決
 # ---------------------------------------------------------------------------
-_WD_BLACK_MT5 = _Path("/Volumes/WD_Black/MT5_cache")
-_LOCAL_MT5 = _Path(__file__).resolve().parent / "MT5_cache"
+_DEFAULT_TICK_CACHE = _Path(r"C:\Users\katun\MQ\tick")
 
 _TICK_FIELDS = ["time_msc", "bid", "ask", "last", "volume", "flags"]
 
 
 def resolve_mt5_cache_dir() -> _Path:
-    """WD_Black があればそこを、なければローカルを使う"""
-    if _WD_BLACK_MT5.parent.exists():
-        _WD_BLACK_MT5.mkdir(parents=True, exist_ok=True)
-        return _WD_BLACK_MT5
-    return _LOCAL_MT5
+    """
+    MT5_TICK_CACHE 環境変数が設定されていればそのパスを使用。
+    未設定時はデフォルト: C:\\Users\\katun\\MQ\\tick
+    """
+    cache_env = os.getenv("MT5_TICK_CACHE", "").strip()
+    cache_dir = _Path(cache_env) if cache_env else _DEFAULT_TICK_CACHE
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
 
 
 async def _download_ticks_bulk_impl(
@@ -341,7 +346,7 @@ TOOLS = [
     ),
     Tool(
         name="download_ticks_bulk",
-        description="指定期間のMT5ティックをCSVでWD_Blackに一括保存（1日×24時間ループ）。WiFi環境で実行すること。",
+        description="指定期間のMT5ティックをCSVでローカルキャッシュに一括保存（1日×24時間ループ）。保存先: MT5_TICK_CACHE（デフォルト: C:\\Users\\katun\\MQ\\tick）",
         inputSchema={
             "type": "object",
             "properties": {
@@ -352,6 +357,103 @@ TOOLS = [
                 **_ACCOUNT_PARAM,
             },
             "required": ["symbol", "start", "end"],
+        },
+    ),
+    # ------------------------------------------------------------------
+    # バックテスト関連ツール
+    # ------------------------------------------------------------------
+    Tool(
+        name="run_backtest",
+        description=(
+            "MT5 Strategy Tester（metatester64.exe）でバックテストを非同期実行する。"
+            "即座に started を返す。完了確認は get_backtest_status、結果取得は get_backtest_result を使用。"
+            "事前に MT5_TESTER_PATH を .env に設定しておくこと。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "expert": {
+                    "type": "string",
+                    "description": r"EA名（MQL5\Experts\ からの相対パス。例: Advisors\AUDCADZone_EA）",
+                },
+                "symbol": {
+                    "type": "string",
+                    "description": "通貨ペア（例: AUDCAD）",
+                },
+                "period": {
+                    "type": "string",
+                    "description": "時間足（M1, M5, M15, M30, H1, H4, D1）",
+                },
+                "from_date": {
+                    "type": "string",
+                    "description": "バックテスト開始日（例: 2024.01.01）",
+                },
+                "to_date": {
+                    "type": "string",
+                    "description": "バックテスト終了日（例: 2026.04.01）",
+                },
+                "deposit": {
+                    "type": "number",
+                    "description": "初期証拠金（デフォルト: 10000）",
+                },
+                "leverage": {
+                    "type": "integer",
+                    "description": "レバレッジ（デフォルト: 100）",
+                },
+                "model": {
+                    "type": "integer",
+                    "description": "バックテストモデル（0=Every tick, 1=Open prices only, 2=Control points。デフォルト: 1）",
+                },
+                "optimization": {
+                    "type": "integer",
+                    "description": "最適化モード（0=無効, 1=スロー, 2=ファスト。デフォルト: 0）",
+                },
+                "inputs": {
+                    "type": "object",
+                    "description": "EA のカスタムパラメーター（例: {\"InpLot\": \"0.1\", \"InpTpPips\": \"7.0\"}）",
+                },
+                "portable": {
+                    "type": "boolean",
+                    "description": "ポータブルモードで metatester64.exe を起動するか（true 推奨。.env の MT5_PORTABLE=true でも設定可）",
+                },
+                "report_path": {
+                    "type": "string",
+                    "description": r"レポート出力先（拡張子不要。デフォルト: C:\Users\katun\EA開発\analysis_orchestra\reports\bt_result）",
+                },
+                **_ACCOUNT_PARAM,
+            },
+            "required": ["expert", "symbol", "from_date", "to_date"],
+        },
+    ),
+    Tool(
+        name="get_backtest_status",
+        description=(
+            "実行中のバックテストの状態を確認する。"
+            "status: idle / running / completed / failed を返す。"
+            "completed になったら get_backtest_result で結果を取得する。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {**_ACCOUNT_PARAM},
+            "required": [],
+        },
+    ),
+    Tool(
+        name="get_backtest_result",
+        description=(
+            "バックテスト完了後にレポートファイル（XML/HTM）を読み込み、"
+            "純利益・PF・最大DD・勝率などの主要指標を返す。"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "report_path": {
+                    "type": "string",
+                    "description": "レポートファイルのパス（拡張子不要）。省略時は直近の run_backtest のパスを使用",
+                },
+                **_ACCOUNT_PARAM,
+            },
+            "required": [],
         },
     ),
 ]
@@ -391,6 +493,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 cache_root=resolve_mt5_cache_dir(),
             )
             return _json_text(result)
+
+        # バックテストツールはリレー経由で転送
+        if name in {"run_backtest", "get_backtest_status", "get_backtest_result"}:
+            result = await client.request(name, arguments)
+            if result.get("status") == "error":
+                return _error_text(result.get("message", "unknown error"))
+            return _json_text(result.get("data", {}))
 
         if name not in _RELAY_TOOL_NAMES:
             return _error_text(f"不明なツール: {name}")
